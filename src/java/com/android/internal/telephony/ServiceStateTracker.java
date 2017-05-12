@@ -147,6 +147,8 @@ public class ServiceStateTracker extends Handler {
      */
     private boolean mDontPollSignalStrength = false;
 
+    private boolean mIsModemTriggeredPollingPending = false;
+
     private RegistrantList mVoiceRoamingOnRegistrants = new RegistrantList();
     private RegistrantList mVoiceRoamingOffRegistrants = new RegistrantList();
     private RegistrantList mDataRoamingOnRegistrants = new RegistrantList();
@@ -155,6 +157,7 @@ public class ServiceStateTracker extends Handler {
     protected RegistrantList mDetachedRegistrants = new RegistrantList();
     private RegistrantList mDataRegStateOrRatChangedRegistrants = new RegistrantList();
     private RegistrantList mNetworkAttachedRegistrants = new RegistrantList();
+    private RegistrantList mNetworkDetachedRegistrants = new RegistrantList();
     private RegistrantList mPsRestrictEnabledRegistrants = new RegistrantList();
     private RegistrantList mPsRestrictDisabledRegistrants = new RegistrantList();
 
@@ -284,6 +287,7 @@ public class ServiceStateTracker extends Handler {
     private final LocalLog mAttachLog = new LocalLog(10);
     private final LocalLog mPhoneTypeLog = new LocalLog(10);
     private final LocalLog mRatLog = new LocalLog(20);
+    private final LocalLog mRadioPowerLog = new LocalLog(20);
 
     private class SstSubscriptionsChangedListener extends OnSubscriptionsChangedListener {
         public final AtomicInteger mPreviousSubId =
@@ -423,6 +427,8 @@ public class ServiceStateTracker extends Handler {
     private boolean mStartedGprsRegCheck;
     /** Already sent the event-log for no gprs register. */
     private boolean mReportedGprsNoReg;
+
+    private CarrierServiceStateTracker mCSST;
     /**
      * The Notification object given to the NotificationManager.
      */
@@ -528,6 +534,9 @@ public class ServiceStateTracker extends Handler {
         int enableCellularOnBoot = Settings.Global.getInt(mCr,
                 Settings.Global.ENABLE_CELLULAR_ON_BOOT, 1);
         mDesiredPowerState = (enableCellularOnBoot > 0) && ! (airplaneMode > 0);
+        mRadioPowerLog.log("init : airplane mode = " + airplaneMode + " enableCellularOnBoot = " +
+                enableCellularOnBoot);
+
 
         mCr.registerContentObserver(
                 Settings.Global.getUriFor(Settings.Global.AUTO_TIME), true,
@@ -549,6 +558,17 @@ public class ServiceStateTracker extends Handler {
         mPhone.notifyOtaspChanged(OTASP_UNINITIALIZED);
 
         updatePhoneType();
+
+        mCSST = new CarrierServiceStateTracker(phone, this);
+
+        registerForNetworkAttached(mCSST,
+                CarrierServiceStateTracker.CARRIER_EVENT_VOICE_REGISTRATION, null);
+        registerForNetworkDetached(mCSST,
+                CarrierServiceStateTracker.CARRIER_EVENT_VOICE_DEREGISTRATION, null);
+        registerForDataConnectionAttached(mCSST,
+                CarrierServiceStateTracker.CARRIER_EVENT_DATA_REGISTRATION, null);
+        registerForDataConnectionDetached(mCSST,
+                CarrierServiceStateTracker.CARRIER_EVENT_DATA_DEREGISTRATION, null);
     }
 
     @VisibleForTesting
@@ -2337,12 +2357,14 @@ public class ServiceStateTracker extends Handler {
 
     protected void setPowerStateToDesired() {
         if (DBG) {
-            log("mDeviceShuttingDown=" + mDeviceShuttingDown +
+            String tmpLog = "mDeviceShuttingDown=" + mDeviceShuttingDown +
                     ", mDesiredPowerState=" + mDesiredPowerState +
                     ", getRadioState=" + mCi.getRadioState() +
                     ", mPowerOffDelayNeed=" + mPowerOffDelayNeed +
                     ", mAlarmSwitch=" + mAlarmSwitch +
-                    ", mRadioDisabledByCarrier=" + mRadioDisabledByCarrier);
+                    ", mRadioDisabledByCarrier=" + mRadioDisabledByCarrier;
+            log(tmpLog);
+            mRadioPowerLog.log(tmpLog);
         }
 
         if (mPhone.isPhoneTypeGsm() && mAlarmSwitch) {
@@ -2545,13 +2567,15 @@ public class ServiceStateTracker extends Handler {
                 // don't poll for state when the radio is off
                 // EXCEPT, if the poll was modemTrigged (they sent us new radio data)
                 // or we're on IWLAN
-                if (!modemTriggered && ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN
-                        != mSS.getRilDataRadioTechnology()) {
+                if (!modemTriggered && !mIsModemTriggeredPollingPending &&
+                        ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN !=
+                        mSS.getRilDataRadioTechnology()) {
                     pollStateDone();
                     break;
                 }
 
             default:
+                if (modemTriggered) mIsModemTriggeredPollingPending = true;
                 // Issue all poll-related commands at once then count down the responses, which
                 // are allowed to arrive out-of-order
                 mPollingContext[0]++;
@@ -2575,6 +2599,7 @@ public class ServiceStateTracker extends Handler {
 
     //todo: try to merge pollstate functions
     private void pollStateDone() {
+        mIsModemTriggeredPollingPending = false;
         if (mPhone.isPhoneTypeGsm()) {
             pollStateDoneGsm();
         } else if (mPhone.isPhoneTypeCdma()) {
@@ -2718,6 +2743,10 @@ public class ServiceStateTracker extends Handler {
                         mNitzUpdatedTime + " changing to false");
             }
             mNitzUpdatedTime = false;
+        }
+
+        if (hasDeregistered) {
+            mNetworkDetachedRegistrants.notifyRegistrants();
         }
 
         if (hasChanged) {
@@ -2878,6 +2907,10 @@ public class ServiceStateTracker extends Handler {
                 mSS.getVoiceRegState() != ServiceState.STATE_IN_SERVICE
                         && mNewSS.getVoiceRegState() == ServiceState.STATE_IN_SERVICE;
 
+        boolean hasDeregistered =
+                mSS.getVoiceRegState() == ServiceState.STATE_IN_SERVICE
+                        && mNewSS.getVoiceRegState() != ServiceState.STATE_IN_SERVICE;
+
         boolean hasCdmaDataConnectionAttached =
                 mSS.getDataRegState() != ServiceState.STATE_IN_SERVICE
                         && mNewSS.getDataRegState() == ServiceState.STATE_IN_SERVICE;
@@ -2950,6 +2983,10 @@ public class ServiceStateTracker extends Handler {
 
         if (hasRegistered) {
             mNetworkAttachedRegistrants.notifyRegistrants();
+        }
+
+        if (hasDeregistered) {
+            mNetworkDetachedRegistrants.notifyRegistrants();
         }
 
         if (hasChanged) {
@@ -3191,6 +3228,10 @@ public class ServiceStateTracker extends Handler {
             mNetworkAttachedRegistrants.notifyRegistrants();
         }
 
+        if (hasDeregistered) {
+            mNetworkDetachedRegistrants.notifyRegistrants();
+        }
+
         if (hasChanged) {
             updateSpnDisplay();
 
@@ -3319,7 +3360,8 @@ public class ServiceStateTracker extends Handler {
             if (!hasBrandOverride && (mCi.getRadioState().isOn()) && (mPhone.isEriFileLoaded()) &&
                     (!ServiceState.isLte(mSS.getRilVoiceRadioTechnology()) ||
                             mPhone.getContext().getResources().getBoolean(com.android.internal.R.
-                                    bool.config_LTE_eri_for_network_name))) {
+                                    bool.config_LTE_eri_for_network_name)) &&
+                                    (!mIsSubscriptionFromRuim)) {
                 // Only when CDMA is in service, ERI will take effect
                 String eriText = mSS.getOperatorAlphaLong();
                 // Now the Phone sees the new ServiceState so it can get the new ERI text
@@ -4304,8 +4346,28 @@ public class ServiceStateTracker extends Handler {
             r.notifyRegistrant();
         }
     }
+
     public void unregisterForNetworkAttached(Handler h) {
         mNetworkAttachedRegistrants.remove(h);
+    }
+
+    /**
+     * Registration point for transition into network detached.
+     * @param h handler to notify
+     * @param what what code of message when delivered
+     * @param obj in Message.obj
+     */
+    public void registerForNetworkDetached(Handler h, int what, Object obj) {
+        Registrant r = new Registrant(h, what, obj);
+
+        mNetworkDetachedRegistrants.add(r);
+        if (mSS.getVoiceRegState() != ServiceState.STATE_IN_SERVICE) {
+            r.notifyRegistrant();
+        }
+    }
+
+    public void unregisterForNetworkDetached(Handler h) {
+        mNetworkDetachedRegistrants.remove(h);
     }
 
     /**
@@ -4676,6 +4738,21 @@ public class ServiceStateTracker extends Handler {
         }
     }
 
+    private void dumpCellInfoList(PrintWriter pw) {
+        pw.print(" mLastCellInfoList={");
+        if(mLastCellInfoList != null) {
+            boolean first = true;
+            for(CellInfo info : mLastCellInfoList) {
+               if(first == false) {
+                   pw.print(",");
+               }
+               first = false;
+               pw.print(info.toString());
+            }
+        }
+        pw.println("}");
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("ServiceStateTracker:");
         pw.println(" mSubId=" + mSubId);
@@ -4695,6 +4772,8 @@ public class ServiceStateTracker extends Handler {
         pw.println(" mCellLoc=" + mCellLoc);
         pw.println(" mNewCellLoc=" + mNewCellLoc);
         pw.println(" mLastCellInfoListTime=" + mLastCellInfoListTime);
+        dumpCellInfoList(pw);
+        pw.flush();
         pw.println(" mPreferredNetworkType=" + mPreferredNetworkType);
         pw.println(" mMaxDataCalls=" + mMaxDataCalls);
         pw.println(" mNewMaxDataCalls=" + mNewMaxDataCalls);
@@ -4767,6 +4846,11 @@ public class ServiceStateTracker extends Handler {
         ipw.println(" Rat Change Log:");
         ipw.increaseIndent();
         mRatLog.dump(fd, ipw, args);
+        ipw.decreaseIndent();
+
+        ipw.println(" Radio power Log:");
+        ipw.increaseIndent();
+        mRadioPowerLog.dump(fd, ipw, args);
         ipw.decreaseIndent();
     }
 
