@@ -235,6 +235,13 @@ public class PhoneFactory {
                 // because ImsService might need it when it is being opened.
                 for (int i = 0; i < numPhones; i++) {
                     sPhones[i].startMonitoringImsService();
+                    // Get users NW type, let it override if its not the default NW mode (-1)
+                    int userNwType = SubscriptionController.getInstance().getUserNwMode(
+                            sPhones[i].getSubId());
+                    if (userNwType != SubscriptionManager.DEFAULT_NW_MODE
+                            && userNwType != networkModes[i]) {
+                        sPhones[i].setPreferredNetworkType(userNwType, null);
+                    }
                 }
 
                 ITelephonyRegistry tr = ITelephonyRegistry.Stub.asInterface(
@@ -334,25 +341,16 @@ public class PhoneFactory {
      */
     // TODO: Fix when we "properly" have TelephonyDevController/SubscriptionController ..
     public static int calculatePreferredNetworkType(Context context, int phoneSubId) {
-        int phoneId = SubscriptionController.getInstance().getPhoneId(phoneSubId);
-        int phoneIdNetworkType = RILConstants.PREFERRED_NETWORK_MODE;
-        try {
-            phoneIdNetworkType = TelephonyManager.getIntAtIndex(context.getContentResolver(),
-                    Settings.Global.PREFERRED_NETWORK_MODE , phoneId);
-        } catch (SettingNotFoundException snfe) {
-            Rlog.e(LOG_TAG, "Settings Exception Reading Valuefor phoneID");
-        }
-        int networkType = phoneIdNetworkType;
-        Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneId = " + phoneId +
-                " phoneIdNetworkType = " + phoneIdNetworkType);
+        int networkType = android.provider.Settings.Global.getInt(context.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId,
+                RILConstants.PREFERRED_NETWORK_MODE);
 
-        if (SubscriptionController.getInstance().isActiveSubId(phoneSubId)) {
-            networkType = android.provider.Settings.Global.getInt(context.getContentResolver(),
-                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId,
-                    phoneIdNetworkType);
-        } else {
-            Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneSubId = " + phoneSubId +
-                    " is not a active SubId");
+        // Get users NW type, let it override if its not the default NW mode (-1)
+        int userNwType = SubscriptionController.getInstance().getUserNwMode(phoneSubId);
+        if (userNwType != SubscriptionManager.DEFAULT_NW_MODE && userNwType != networkType) {
+            Rlog.d(LOG_TAG, "calculatePreferredNetworkType: overriding for usernw mode " +
+                    "phoneSubId = " + phoneSubId + " networkType = " + networkType);
+            networkType = userNwType;
         }
         Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneSubId = " + phoneSubId +
                 " networkType = " + networkType);

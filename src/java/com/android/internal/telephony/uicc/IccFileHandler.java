@@ -552,10 +552,11 @@ public abstract class IccFileHandler extends Handler implements IccConstants {
 
                     size = tlvData.mFileSize;
                 } else {
-                	if (VDBG) {
-                    	logd(String.format("Contents of the Select Response for command %x: ", fileid)
+                    if (VDBG) {
+                    logd(String.format("Contents of the Select Response for command %x: ", fileid)
                             + IccUtils.bytesToHexString(data));
-                	}
+                    }
+
                     if (TYPE_EF != data[RESPONSE_DATA_FILE_TYPE]) {
                         throw new IccFileTypeMismatch();
                     }

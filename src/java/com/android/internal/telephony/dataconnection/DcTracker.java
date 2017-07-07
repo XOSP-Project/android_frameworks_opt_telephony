@@ -1743,7 +1743,7 @@ public class DcTracker extends Handler {
             if (apnContext.isDisconnected() == false) didDisconnect = true;
             if (disableMeteredOnly) {
                 if (!apnContext.getApnType().equals(PhoneConstants.APN_TYPE_IMS)) {
-		// Use ApnSetting to decide metered or non-metered.
+        // Use ApnSetting to decide metered or non-metered.
                 // Tear down all metered data connections.
                 ApnSetting apnSetting = apnContext.getApnSetting();
                 if (apnSetting != null && apnSetting.isMetered(mPhone.getContext(),
@@ -1898,7 +1898,7 @@ public class DcTracker extends Handler {
         }
         int bearer = mPhone.getServiceState().getRilDataRadioTechnology();
         IccRecords r = mIccRecords.get();
-        String operator = mPhone.getOperatorNumeric();
+        String operator = (r != null) ? r.getOperatorNumeric() : "";
         ArrayList<ApnSetting> dunCandidates = new ArrayList<ApnSetting>();
         ApnSetting retDunSetting = null;
 
